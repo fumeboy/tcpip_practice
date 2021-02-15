@@ -14,28 +14,26 @@ const (
 	maxFrameSize   = headerSize + maxPayloadSize + trailerSize
 )
 
-type ethernetType uint16
+type ethProtocolType uint16
 
 const (
-	ethernetTypeIPv4   ethernetType = 0x0800
-	ethernetTypeARP  ethernetType = 0x0806
-	ethernetTypeIPv6 ethernetType = 0x86dd
+	ethernetTypeIPv4 ethProtocolType = 0x0800
+	ethernetTypeARP  ethProtocolType = 0x0806
+	ethernetTypeIPv6 ethProtocolType = 0x86dd
 )
 
-type ethHeader struct {
-	Dst  [6]byte
-	Src  [6]byte
-	Type ethernetType
-}
-
-type ethFrame struct {
-	ethHeader
+type eth struct {
+	header struct {
+		Dst  [6]byte
+		Src  [6]byte
+		Type ethProtocolType
+	}
 	payload []byte
 }
 
-func (f *ethFrame) encode() []byte {
+func (f *eth) encode() []byte {
 	frame := bytes.NewBuffer(make([]byte, 0))
-	binary.Write(frame, binary.BigEndian, f.ethHeader)
+	binary.Write(frame, binary.BigEndian, f.header)
 	binary.Write(frame, binary.BigEndian, f.payload)
 	if pad := minFrameSize - frame.Len(); pad > 0 {
 		binary.Write(frame, binary.BigEndian, bytes.Repeat([]byte{byte(0)}, pad))
@@ -43,14 +41,11 @@ func (f *ethFrame) encode() []byte {
 	return frame.Bytes()
 }
 
-type ethRaw []byte
-
-func (data ethRaw) decode() (*ethFrame, error) {
-	frame := ethFrame{}
+func (f *eth) decode(data []byte) (error) {
 	buf := bytes.NewBuffer(data)
-	if err := binary.Read(buf, binary.BigEndian, &frame.ethHeader); err != nil {
-		return nil, err
+	if err := binary.Read(buf, binary.BigEndian, &f.header); err != nil {
+		return err
 	}
-	frame.payload = buf.Bytes()
-	return &frame, nil
+	f.payload = buf.Bytes()
+	return nil
 }

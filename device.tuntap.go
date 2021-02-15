@@ -1,11 +1,12 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"unsafe"
 )
@@ -26,32 +27,39 @@ const tap tuntap = syscall.IFF_TAP|syscall.IFF_NO_PI
 
 // 新建一个 tap/tun 模式的虚拟网卡，然后返回该网卡的文件描述符
 // 先打开一个字符串设备，通过系统调用将虚拟网卡和字符串设备fd绑定在一起
-func (flags tuntap) open(name string, netmask string, ipv4Addr [4]byte, hardwareAddr [6]byte) (*device, error) {
+func (flags tuntap) open(name string, netmask string, ipv4Addr [4]byte) (*device, error) {
 	//打开tuntap的字符设备，得到字符设备的文件描述字
 	fd, err := os.OpenFile("/dev/net/tun", syscall.O_RDWR, 0600)
 	if err != nil {
+		log.Println(err)
 		return nil, err
 	}
 	var ifr struct {
 		name	[0x10]byte
 		flags	uint16
-		_	[0x28 - 0x10 - 2]byte
+		union	[0x28 - 0x10 - 2]byte
 	}
 	copy(ifr.name[:], name)
 	ifr.flags = uint16(flags)
 	//通过ioctl系统调用，将fd和虚拟网卡驱动绑定在一起
-	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr)))
-	if errno != 0 {
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.TUNSETIFF, uintptr(unsafe.Pointer(&ifr)));errno != 0 {
 		fd.Close()
 		return nil, errno
 	}
-
 	if err = SetLinkUp(name);err != nil{
+		log.Println(err)
 		return nil,err
 	}
-	if err = SetRoute(name, netmask);err != nil{
+	if err = SetAddr(name, netmask);err != nil{
+		log.Println(err)
 		return nil,err
 	}
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd.Fd(), syscall.SIOCGIFHWADDR, uintptr(unsafe.Pointer(&ifr))); errno != 0{
+		fd.Close()
+		return nil, errno
+	}
+	var hardwareAddr [6]byte
+	copy(hardwareAddr[:], ifr.union[:6])
 
 	// 返回的文件描述字 fd 可以用来 read 和 write 该虚拟设备的以太网缓冲区
 	return &device{
@@ -59,6 +67,10 @@ func (flags tuntap) open(name string, netmask string, ipv4Addr [4]byte, hardware
 		hardwareAddr: hardwareAddr,
 		ipv4Addr: ipv4Addr,
 	}, nil
+}
+
+func (flags tuntap) lazy(i int) (*device, error){
+	return flags.open("dev"+strconv.Itoa(i), fmt.Sprintf("10.0.0.%d/24", i),  [4]byte{10,0,0,byte(i)})
 }
 
 //SetLinkUp 让系统启动该网卡
@@ -72,43 +84,42 @@ func SetLinkUp(name string) (err error) {
 	return
 }
 
-//SetRoute 通过ip命令添加路由
-func SetRoute(name, cidr string) (err error) {
-	//ip route add 192.168.1.0/24 dev tap0
-	out, cmdErr := exec.Command("ip", "route", "add", cidr, "dev", name).CombinedOutput()
+func SetAddr(name, cidr string) (err error) {
+	out, cmdErr := exec.Command("ip", "address", "add", "dev", name, cidr).CombinedOutput()
 	if cmdErr != nil {
-		err = fmt.Errorf("%v:%v", cmdErr, string(out))
+		err = fmt.Errorf("p %v:%v", cmdErr, string(out))
 		return
 	}
 	return
 }
 
-func (dev *device) run(handler func(dev *device, frame *ethFrame) error) {
+func (dev *device) run(sig chan struct{}, handler func(dev *device, frame *eth) error) {
+	fmt.Printf("start at %x\n", dev.hardwareAddr)
 	buf := make([]byte, 2 << 12)
 	var err error
 	var n int
-	var frame *ethFrame
-	for {
-		n, err = dev.Read(buf)
-		if n > 0 {
-			fmt.Printf("--- %d bytes ---\n", n)
-			fmt.Printf("%s\n", hex.Dump(buf[:n]))
+	var frame eth
+	L:for {
+		select {
+		case <- sig:
+			break L
+		default:
 		}
+		n, err = dev.Read(buf)
 		if err != nil {
 			if err != io.EOF {
-				fmt.Println(err)
+				log.Println(err)
 			}
 			break
 		}
-		frame, err = (ethRaw)(buf).decode()
-		if err != nil {
+		if err = frame.decode(buf[:n]); err != nil {
 			break
 		}
-		if err = handler(dev, frame); err == nil {
+		if err = handler(dev, &frame); err == nil {
+			frame.header.Src = dev.hardwareAddr
 			dev.Write(frame.encode())
 		}
 	}
-	fmt.Println(err)
 	fmt.Println("good bye")
 }
 
