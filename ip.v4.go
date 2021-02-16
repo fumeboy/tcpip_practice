@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"log"
 	"unsafe"
 )
 
@@ -20,6 +21,28 @@ const (
 	IPv4FlagDontFragment
 )
 
+/*
+
+0               1               2               3               4
+0 1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8 1 2 3 4 5 6 7 8
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|Version|  IHL  | Type of Service |        Total Length         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|  Identification(fragment Id)    |Flags|  Fragment Offset      |
+|           16 bits               |R|D|M|       13 bits         |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+| Time-To-Live  |   Protocol      |      Header Checksum        |
+| ttl(8 bits)   |    8 bits       |          16 bits            |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|               Source IP Address (32 bits)                     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|              Destination Ip Address (32 bits)                 |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+|                    Options (*** bits)          |  Padding     |
++-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+
+*/
+
 type ipv4 struct {
 	header struct{
 		Version_IHL uint8
@@ -28,7 +51,7 @@ type ipv4 struct {
 		// 由于 ihl 的大小为4位，因此最多只能保留15个值
 		// 因此，IP报头的最大长度为60个八位位组（15乘以32除以8）,32 是 ipv4 默认的机器字长，8即一个字节占8bit
 		TOS                  uint8  // type of service
-		Len                  uint16 // 数据报文总长
+		Len                  uint16 // 数据报文总长(单位 1 字节)
 		Id                   uint16
 		Flags_FragmentOffset uint16
 		// flags , 占 3 bit， 控制标志
@@ -42,23 +65,6 @@ type ipv4 struct {
 	payload []byte
 }
 
-func CheckSum16(b []byte, n int, init uint32) uint16 {
-	sum := init
-	for i := 0; i < n-1; i += 2 {
-		sum += uint32(b[i])<<8 | uint32(b[i+1])
-		if (sum >> 16) > 0 {
-			sum = (sum & 0xffff) + (sum >> 16)
-		}
-	}
-	if n&1 != 0 {
-		sum += uint32(b[n-1]) << 8
-		if (sum >> 16) > 0 {
-			sum = (sum & 0xffff) + (sum >> 16)
-		}
-	}
-	return ^(uint16(sum))
-}
-
 func (f *ipv4) decode(data []byte) error {
 	if len(data) < int(unsafe.Sizeof(f.header)) {
 		return fmt.Errorf("ip packet is too short (%d)", len(data))
@@ -67,14 +73,14 @@ func (f *ipv4) decode(data []byte) error {
 	if err := binary.Read(buf, binary.BigEndian, &f.header); err != nil {
 		return err
 	}
-	if f.header.Version_IHL>> 4 != ipv4Version {
+	if f.header.Version_IHL >> 4 != ipv4Version {
 		return fmt.Errorf("not ipv4 packet")
 	}
 	hlen := int((f.header.Version_IHL & 0x0f) << 2) // 左移 2 位表示 乘以32除以8
 	if len(data) < hlen {
 		return fmt.Errorf("need least header length's data")
 	}
-	if sum := CheckSum16(data, hlen, 0); sum != 0 {
+	if sum := CheckSum16(data, hlen, 0); sum != 0 { // ip 校验和只需要校验头部
 		return fmt.Errorf("ip checksum error (%x)", sum)
 	}
 	if len(data) < int(f.header.Len) {
@@ -88,25 +94,43 @@ func (f *ipv4) decode(data []byte) error {
 }
 
 func (f *ipv4) encode() []byte{
+	f.header.Checksum = 0
 	buf := new(bytes.Buffer)
 	binary.Write(buf, binary.BigEndian, &f.header)
-	binary.Write(buf, binary.BigEndian, f.payload)
 	b := buf.Bytes()
 	binary.BigEndian.PutUint16(b[10:12], CheckSum16(b, int((f.header.Version_IHL&0x0f)<<2), 0))
-	return b
+	return append(b, f.payload...)
 }
+
+/*~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+  todo: ip数据报重组
+  当上层应用数据报过大,超过了MTU,那么在ip层就要进行拆包,将
+  大数据拆分成小数据发送出去,对方接收到之后也要进行组包.
+ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
 
 func (f ipv4) handle(dev*device, upper *eth) (err error) {
 	if err = f.decode(upper.payload);err != nil{
+		log.Println(err)
 		return
+	}
+	fmt.Printf("%s  ip %s src: %v dst: %v type: %d\n",
+		yellow, reset,
+		f.header.Src, f.header.Dst, f.header.Protocol)
+	if f.header.Dst != dev.ipv4Addr{
+		return errors.New("Not us")
 	}
 	switch f.header.Protocol {
 	case ipv4ProtocolTypeICMP:
 		err = (icmp{}).handle(&f)
+	case ipv4ProtocolTypeTCP:
+		err = (tcp{}).handle(&f)
 	default:
 		err = errors.New("TODO")
 	}
 	if err == nil{
+		fmt.Printf("%s  ip+%s src: %v dst: %v type: %d\n",
+			yellow, reset,
+			f.header.Src, f.header.Dst, f.header.Protocol)
 		upper.payload = f.encode()
 		upper.header.Dst = upper.header.Src
 	}

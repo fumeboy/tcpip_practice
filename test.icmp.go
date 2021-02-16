@@ -12,7 +12,7 @@ import (
 
 /*
 	在终端 1 执行  sudo go run . -tags icmp
-	在终端 2 执行  ping -c3 10.0.0.1
+	在终端 2 执行  ping -c3 10.1.0.1
 	ping 结果是 3 packets transmitted, 3 received, 0% packet loss 即成功
 */
 func main(){

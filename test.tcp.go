@@ -1,10 +1,9 @@
-// +build arp
+// +build tcp
 
 package main
 
 import (
 	"errors"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -12,14 +11,15 @@ import (
 )
 
 /*
-	在终端 1 执行  sudo go run . -tags arp
-	在终端 2 执行  sudo arping -I dev1 10.1.0.1
+	在终端 1 执行  sudo go run . -tags tcp
+	在终端 2 执行  nmap -Pn 10.1.0.1 -p 1337
+	结果是 1337/tcp open  waste 即成功
 */
 func main(){
 	log.SetFlags(log.Lshortfile)
 	dev,err := tap.lazy(1)
 	if err != nil{
-		fmt.Println(err)
+		log.Println(err)
 		return
 	}
 	defer dev.Close()
@@ -30,6 +30,8 @@ func main(){
 	sig := make(chan struct{})
 	go dev.run(sig, func(dev *device, frame *eth) error {
 		switch frame.header.Type {
+		case ethernetTypeIPv4:
+			return (ipv4{}).handle(dev, frame)
 		case ethernetTypeARP:
 			return (arp{}).handle(dev, frame)
 		}

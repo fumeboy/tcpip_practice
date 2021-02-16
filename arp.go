@@ -36,7 +36,7 @@ func (f *arp) encode() []byte{
 	return buf.Bytes()
 }
 
-func (f *arp) decode(data []byte) (error) {
+func (f *arp) decode(data []byte) error {
 	buf := bytes.NewBuffer(data)
 	if err := binary.Read(buf, binary.BigEndian, f); err != nil {
 		return err
@@ -48,9 +48,10 @@ func (f arp) handle (dev *device, upper *eth) error{
 	if err := f.decode(upper.payload);err != nil{
 		return err
 	}
-	fmt.Printf("arp\tsrc: %x %x \tdst: %x %x\n",
+	fmt.Printf("%s arp %s src: %x %x dst: %x %x type: %d\n",
+		blue, reset,
 		f.SourceHardwareAddress, f.SourceProtocolAddress,
-		f.TargetHardwareAddress, f.TargetProtocolAddress)
+		f.TargetHardwareAddress, f.TargetProtocolAddress, f.ProtocolType)
 	if f.HardwareType != HardwareTypeEthernet{
 		return errors.New("UnsupportedHardWareType")
 	}
