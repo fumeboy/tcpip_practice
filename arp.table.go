@@ -10,7 +10,7 @@ type arpEntry struct {
 	hardwareAddress [6]byte
 	timestamp       time.Time
 }
-
+// arp 缓存表
 type arpTable struct {
 	storage []*arpEntry
 	mutex   sync.RWMutex

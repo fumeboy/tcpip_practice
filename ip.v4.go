@@ -116,6 +116,7 @@ func (f ipv4) handle(dev*device, upper *eth) (err error) {
 	fmt.Printf("%s  ip %s src: %v dst: %v type: %d\n",
 		yellow, reset,
 		f.header.Src, f.header.Dst, f.header.Protocol)
+
 	if f.header.Dst != dev.ipv4Addr{
 		return errors.New("Not us")
 	}
@@ -131,6 +132,7 @@ func (f ipv4) handle(dev*device, upper *eth) (err error) {
 		fmt.Printf("%s  ip+%s src: %v dst: %v type: %d\n",
 			yellow, reset,
 			f.header.Src, f.header.Dst, f.header.Protocol)
+
 		upper.payload = f.encode()
 		upper.header.Dst = upper.header.Src
 	}

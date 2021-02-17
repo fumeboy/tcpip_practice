@@ -118,9 +118,11 @@ func (f tcp) handle(upper *ipv4) (err error) {
 	}
 	f.header.DataOffset = 5 << 4
 	f.payload = nil
+
 	fmt.Printf("%s tcp+%s src %d dst %d seq %d\n",
 		green, reset,
 		f.header.SrcPort, f.header.DstPort, f.header.SeqNum)
+
 	upper.header.Src, upper.header.Dst = upper.header.Dst, upper.header.Src
 	upper.header.Len = uint16(upper.header.Version_IHL&0x0f)<<2 + 20
 	upper.payload = f.encode(upper)
